@@ -1,0 +1,77 @@
+{
+  "name": "errorsimplifier",
+  "displayName": "Error Simplifier Pro",
+  "description": "AI-powered Java error explanation and debugging assistant with secure API integration",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.98.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Linters",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onCommand:errorsimplifier.runJavaFile",
+    "onCommand:errorsimplifier.setApiKey",
+    "onLanguage:java"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "errorsimplifier.runJavaFile",
+        "title": "Run Java File with Error Analysis"
+      },
+      {
+        "command": "errorsimplifier.setApiKey",
+        "title": "Set Hugging Face API Key"
+      }
+    ],
+    "configuration": {
+      "title": "Error Simplifier",
+      "properties": {
+        "errorsimplifier.apiTimeout": {
+          "type": "number",
+          "default": 30,
+          "description": "Timeout in seconds for API requests"
+        },
+        "errorsimplifier.maxTokens": {
+          "type": "number",
+          "default": 150,
+          "description": "Maximum tokens for AI explanations"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.98.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.21.0"
+  },
+  "dependencies": {
+    "axios": "^1.8.2"
+  },
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/error-simplifier"
+  },
+  "publisher": "YourPublisherName",
+  "keywords": [
+    "java",
+    "debugging",
+    "ai",
+    "error-handling",
+    "productivity"
+  ]
+}
