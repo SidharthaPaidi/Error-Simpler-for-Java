@@ -31,7 +31,7 @@ Open VS Code
 - Auto Analysis: Save a Java file (Ctrl+S)
 - Manual Check: Ctrl+Shift+P → "Run Java File with Error Analysis"
 
-## Demo
+## Demo Video
 
 [![ Demo](https://miro.medium.com/v2/resize:fit:4800/format:webp/1*7NVcWkICivr3Vdc1IUElrA.png)](https://drive.google.com/file/d/1maLM5q2myo8klzNhkAFItmWp3VHGCgj-/view?usp=sharing)
 
