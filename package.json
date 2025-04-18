@@ -2,7 +2,7 @@
   "name": "errorsimplifier",
   "displayName": "Error Simplifier Pro",
   "description": "AI-powered Java error explanation and debugging assistant with secure API integration",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "engines": {
     "vscode": "^1.98.0"
   },
