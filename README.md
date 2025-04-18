@@ -12,8 +12,8 @@ An AI-powered VS Code extension that simplifies Java error messages using Huggin
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/your-repo-name.git
-cd your-repo-name
+git clone https://github.com/SidharthaPaidi/Error-Simpler-for-Java.git
+cd Error-Simpler-for-Java
 npm install
 npm run package
 Open VS Code
