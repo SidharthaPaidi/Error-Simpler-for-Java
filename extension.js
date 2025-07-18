@@ -9,10 +9,10 @@ const execAsync = promisify(exec);
 async function activate(context) {
 	console.log("Error Simplifier Extension Activated!");
 
-	// Check for Java installation
+	// Ensure Java is installed before proceeding
 	await verifyJavaInstallation();
 
-	// Register commands
+	// Register extension commands
 	context.subscriptions.push(
 		vscode.commands.registerCommand("errorsimplifier.runJavaFile", () => handleJavaExecution(context)),
 		vscode.commands.registerCommand("errorsimplifier.setApiKey", async () => {
@@ -27,7 +27,7 @@ async function activate(context) {
 		})
 	);
 
-	// Auto-detect Java file saves
+	// Automatically run on Java file save
 	context.subscriptions.push(
 		vscode.workspace.onDidSaveTextDocument(async (document) => {
 			if (document.languageId === "java") {
@@ -54,6 +54,7 @@ async function handleJavaExecution(context, filePath) {
 	}
 }
 
+// Prompt for API key if not found in secrets
 async function getApiKey(context) {
 	let apiKey = await context.secrets.get("huggingfaceApiKey");
 	if (!apiKey) {
@@ -76,56 +77,7 @@ async function getApiKey(context) {
 	return apiKey;
 }
 
-async function executeJavaWithErrors(filePath, apiKey) {
-	const { dir: fileDir, name: className } = path.parse(filePath);
-
-	await vscode.window.withProgress({
-		location: vscode.ProgressLocation.Notification,
-		title: "Processing Java file"
-	}, async (progress) => {
-		progress.report({ message: "Compiling..." });
-		const compileOutput = await compileJava(filePath);
-
-		progress.report({ message: "Running..." });
-		const runtimeOutput = await runJava(fileDir, className);
-
-		vscode.window.showInformationMessage(`Program Output:\n${runtimeOutput}`);
-	});
-}
-
-async function compileJava(filePath) {
-	try {
-		const { stderr } = await execAsync(`javac "${filePath}"`);
-		return stderr;
-	} catch (error) {
-		await handleCompilationError(error.stderr, filePath);
-		throw error;
-	}
-}
-
-async function runJava(fileDir, className) {
-	try {
-		const { stdout, stderr } = await execAsync(`java -cp "${fileDir}" ${className}`);
-		if (stderr) throw new Error(stderr);
-		return stdout;
-	} catch (error) {
-		await handleRuntimeError(error.message, fileDir);
-		throw error;
-	}
-}
-
-async function handleCompilationError(errorOutput, filePath) {
-	const cleanError = cleanJavaError(errorOutput, filePath);
-	const explanation = await getErrorExplanation(cleanError, "compilation");
-	showErrorWithExplanation(cleanError, explanation);
-}
-
-async function handleRuntimeError(errorOutput, fileDir) {
-	const cleanError = cleanJavaError(errorOutput, fileDir);
-	const explanation = await getErrorExplanation(cleanError, "runtime");
-	showErrorWithExplanation(cleanError, explanation);
-}
-
+// Remove file paths and unnecessary lines from error output
 function cleanJavaError(error, contextPath) {
 	return error.replace(new RegExp(contextPath, "g"), "")
 		.split("\n")
@@ -134,75 +86,99 @@ function cleanJavaError(error, contextPath) {
 		.trim();
 }
 
-// Update the getErrorExplanation function signature
-async function getErrorExplanation(error, errorType, apiKey) {  // Add apiKey parameter
+// Request an explanation for the error from Hugging Face API
+async function getErrorExplanation(error, errorType, apiKey) {
 	try {
 		return await vscode.window.withProgress({
 			location: vscode.ProgressLocation.Notification,
 			title: "Analyzing error"
 		}, async () => {
-			const response = await axios.post(
-				"https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
-				{
-					inputs: `Explain this Java ${errorType} error in simple terms: ${error}`,
-					parameters: {
-						max_new_tokens: 150,
-						temperature: 0.7
-					}
-				},
-				{
-					headers: {
-						Authorization: `Bearer ${apiKey}`,  // Use passed apiKey
-						"Content-Type": "application/json"
+			try {
+				const response = await axios.post(
+					"https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
+					{
+						inputs: `Explain this Java ${errorType} error in simple terms: ${error}`,
+						parameters: {
+							max_new_tokens: 150,
+							temperature: 0.7
+						}
 					},
-					timeout: 30000
-				}
-			);
+					{
+						headers: {
+							Authorization: `Bearer ${apiKey}`,
+							"Content-Type": "application/json"
+						},
+						timeout: 30000
+					}
+				);
 
-			return processApiResponse(response.data);
+				if (!response.data) {
+					throw new Error("Empty response from API");
+				}
+
+				return processApiResponse(response.data);
+			} catch (apiError) {
+				console.error("API Request Failed:", apiError);
+
+				if (apiError.response) {
+					if (apiError.response.status === 401) {
+						return "API Error: Invalid API key. Please check your Hugging Face API key.";
+					} else if (apiError.response.status === 429) {
+						return "API Error: Rate limit exceeded. Please try again later.";
+					} else {
+						return `API Error: ${apiError.response.status} - ${apiError.response.statusText}`;
+					}
+				} else if (apiError.request) {
+					return "API Error: No response received. Check your internet connection.";
+				} else {
+					return `API Error: ${apiError.message}`;
+				}
+			}
 		});
-	} catch (error) {
-		console.error("API Error:", error);
-		return "Could not get explanation. Please check your API key and connection.";
+	} catch (progressError) {
+		console.error("Progress Error:", progressError);
+		return "Error occurred while analyzing the error. Please try again.";
 	}
 }
 
-// Update the calls to getErrorExplanation in both handler functions
-async function handleCompilationError(errorOutput, filePath, apiKey) {  // Add apiKey parameter
+// Handle compilation errors and show explanations
+async function handleCompilationError(errorOutput, filePath, apiKey) {
 	const cleanError = cleanJavaError(errorOutput, filePath);
 	const explanation = await getErrorExplanation(cleanError, "compilation", apiKey);
 	showErrorWithExplanation(cleanError, explanation);
 }
 
-async function handleRuntimeError(errorOutput, fileDir, apiKey) {  // Add apiKey parameter
+// Handle runtime errors and show explanations
+async function handleRuntimeError(errorOutput, fileDir, apiKey) {
 	const cleanError = cleanJavaError(errorOutput, fileDir);
 	const explanation = await getErrorExplanation(cleanError, "runtime", apiKey);
 	showErrorWithExplanation(cleanError, explanation);
 }
 
-// Update the error handler calls in compileJava and runJava functions
-async function compileJava(filePath, apiKey) {  // Add apiKey parameter
+// Compile Java file and handle errors
+async function compileJava(filePath, apiKey) {
 	try {
 		const { stderr } = await execAsync(`javac "${filePath}"`);
 		return stderr;
 	} catch (error) {
-		await handleCompilationError(error.stderr, filePath, apiKey);  // Pass apiKey
+		await handleCompilationError(error.stderr, filePath, apiKey);
 		throw error;
 	}
 }
 
-async function runJava(fileDir, className, apiKey) {  // Add apiKey parameter
+// Run Java class and handle errors
+async function runJava(fileDir, className, apiKey) {
 	try {
 		const { stdout, stderr } = await execAsync(`java -cp "${fileDir}" ${className}`);
 		if (stderr) throw new Error(stderr);
 		return stdout;
 	} catch (error) {
-		await handleRuntimeError(error.message, fileDir, apiKey);  // Pass apiKey
+		await handleRuntimeError(error.message, fileDir, apiKey);
 		throw error;
 	}
 }
 
-// Update the executeJavaWithErrors function
+// Compile and run Java file, showing output or errors
 async function executeJavaWithErrors(filePath, apiKey) {
 	const { dir: fileDir, name: className } = path.parse(filePath);
 
@@ -211,15 +187,16 @@ async function executeJavaWithErrors(filePath, apiKey) {
 		title: "Processing Java file"
 	}, async (progress) => {
 		progress.report({ message: "Compiling..." });
-		const compileOutput = await compileJava(filePath, apiKey);  // Pass apiKey
+		const compileOutput = await compileJava(filePath, apiKey);
 
 		progress.report({ message: "Running..." });
-		const runtimeOutput = await runJava(fileDir, className, apiKey);  // Pass apiKey
+		const runtimeOutput = await runJava(fileDir, className, apiKey);
 
 		vscode.window.showInformationMessage(`Program Output:\n${runtimeOutput}`);
 	});
 }
 
+// Extract explanation text from API response
 function processApiResponse(data) {
 	if (!data || !data[0]?.generated_text) return "No explanation available";
 
@@ -229,6 +206,7 @@ function processApiResponse(data) {
 		.replace(/\n/g, " ");
 }
 
+// Show error message with option to view explanation
 function showErrorWithExplanation(error, explanation) {
 	vscode.window.showErrorMessage(`Java Error: ${error}`, "Show Explanation")
 		.then(choice => {
@@ -241,6 +219,7 @@ function showErrorWithExplanation(error, explanation) {
 		});
 }
 
+// Check if Java is installed, prompt user if not
 async function verifyJavaInstallation() {
 	try {
 		await execAsync("javac -version");
@@ -254,8 +233,6 @@ async function verifyJavaInstallation() {
 			}
 		});
 	}
-
-
 }
 
 function deactivate() { }
@@ -264,4 +241,3 @@ module.exports = {
 	activate,
 	deactivate
 };
-
