@@ -21,10 +21,33 @@ async function activate(context) {
 				ignoreFocusOut: true
 			});
 			if (apiKey) {
-				await context.secrets.store("huggingfaceApiKey", apiKey);
+				if (!validateApiKey(apiKey)) {
+					vscode.window.showErrorMessage("Invalid API key format. Together.ai keys start with 'tg_api_'");
+					return;
+				}
+
+				
+				await context.secrets.store("togetherApiKey", apiKey);
 				vscode.window.showInformationMessage("API key saved securely!");
 			}
+		}),
+		vscode.commands.registerCommand("errorsimplifier.setModel", async () => {
+			const model = await vscode.window.showQuickPick([
+				"mistralai/Mixtral-8x7B-Instruct-v0.1",
+				"mistralai/Mistral-7B-Instruct-v0.1",
+				"codellama/CodeLlama-7b-Instruct-hf",
+				"deepseek-ai/deepseek-coder-6.7b-instruct"
+			], {
+				placeHolder: "Select AI model for error explanations",
+				ignoreFocusOut: true
+			});
+
+			if (model) {
+				await context.workspaceState.update("selectedModel", model);
+				vscode.window.showInformationMessage(`Model set to: ${model}`);
+			}
 		})
+
 	);
 
 	// Automatically run on Java file save
@@ -54,21 +77,26 @@ async function handleJavaExecution(context, filePath) {
 	}
 }
 
+// Validate API key format
+function validateApiKey(apiKey) {
+	return apiKey.startsWith("tg_api_");
+}
+
 // Prompt for API key if not found in secrets
 async function getApiKey(context) {
-	let apiKey = await context.secrets.get("huggingfaceApiKey");
+	let apiKey = await context.secrets.get("togetherApiKey");
 	if (!apiKey) {
 		const choice = await vscode.window.showErrorMessage(
-			"Hugging Face API key required!",
+			"Together.ai API key required!",
 			"Enter API Key"
 		);
 		if (choice === "Enter API Key") {
 			apiKey = await vscode.window.showInputBox({
-				prompt: "Enter your Hugging Face API key",
+				prompt: "Enter your Together.ai API key",
 				ignoreFocusOut: true
 			});
 			if (apiKey) {
-				await context.secrets.store("huggingfaceApiKey", apiKey);
+				await context.secrets.store("togetherApiKey", apiKey);
 				return apiKey;
 			}
 		}
@@ -86,22 +114,37 @@ function cleanJavaError(error, contextPath) {
 		.trim();
 }
 
-// Request an explanation for the error from Hugging Face API
-async function getErrorExplanation(error, errorType, apiKey) {
-	try {
-		return await vscode.window.withProgress({
-			location: vscode.ProgressLocation.Notification,
-			title: "Analyzing error"
-		}, async () => {
+async function getErrorExplanation(errorType, errorText, apiKey) {
+	const config = vscode.workspace.getConfiguration('errorSimplifier');
+	const model = config.get('model') || "mistralai/Mixtral-8x7B-Instruct-v0.1";
+
+	const prompt = `Explain this Java ${errorType} error in simple terms: ${errorText}`;
+
+	const maxTokens = config.get('maxTokens') || 200;
+	const temperature = config.get('temperature') || 0.7;
+
+	return await vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: "Analyzing error",
+		cancellable: false
+	}, async () => {
+		let retries = 3;
+
+		while (retries > 0) {
 			try {
 				const response = await axios.post(
-					"https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
+					"https://api.together.xyz/v1/chat/completions",
 					{
-						inputs: `Explain this Java ${errorType} error in simple terms: ${error}`,
-						parameters: {
-							max_new_tokens: 150,
-							temperature: 0.7
-						}
+						model,
+						messages: [
+							{
+								role: "system",
+								content: "You are a helpful programming assistant. Explain errors in simple terms with 1-2 sentence solutions."
+							},
+							{ role: "user", content: prompt }
+						],
+						max_tokens: maxTokens,
+						temperature
 					},
 					{
 						headers: {
@@ -112,33 +155,44 @@ async function getErrorExplanation(error, errorType, apiKey) {
 					}
 				);
 
-				if (!response.data) {
-					throw new Error("Empty response from API");
+				return formatExplanation(response.data.choices[0].message.content);
+			} catch (err) {
+				if (err.response?.status === 429 && retries > 0) {
+					// Exponential backoff for rate limits
+					const delay = Math.pow(2, 4 - retries) * 1000;
+					await new Promise(resolve => setTimeout(resolve, delay));
+					retries--;
+					continue;
 				}
 
-				return processApiResponse(response.data);
-			} catch (apiError) {
-				console.error("API Request Failed:", apiError);
+				console.error("API Error:", err.response?.data || err.message);
 
-				if (apiError.response) {
-					if (apiError.response.status === 401) {
-						return "API Error: Invalid API key. Please check your Hugging Face API key.";
-					} else if (apiError.response.status === 429) {
-						return "API Error: Rate limit exceeded. Please try again later.";
+				if (err.response) {
+					if (err.response.status === 401) {
+						throw new Error("Invalid API key. Please check your Together.ai API key.");
+					} else if (err.response.status === 404) {
+						throw new Error(`Model ${model} not found. Check your model name.`);
 					} else {
-						return `API Error: ${apiError.response.status} - ${apiError.response.statusText}`;
+						throw new Error(`API Error: ${err.response.status} - ${err.response.statusText}`);
 					}
-				} else if (apiError.request) {
-					return "API Error: No response received. Check your internet connection.";
+				} else if (err.request) {
+					throw new Error("No response from API. Check your internet connection.");
 				} else {
-					return `API Error: ${apiError.message}`;
+					throw new Error(`API Request Error: ${err.message}`);
 				}
 			}
-		});
-	} catch (progressError) {
-		console.error("Progress Error:", progressError);
-		return "Error occurred while analyzing the error. Please try again.";
-	}
+		}
+		throw new Error("API request failed after multiple retries");
+	});
+}
+
+
+// Format the explanation for better readability
+function formatExplanation(rawText) {
+	return rawText
+		.replace(/\n\s*\n/g, "\n\n") // Clean up extra newlines
+		.replace(/(\d+\.)\s*/g, "\n$1 ") // Format numbered lists
+		.replace(/\*\*(.*?)\*\*/g, (_, match) => `**${match.trim()}**`); // Markdown bold
 }
 
 // Handle compilation errors and show explanations
@@ -196,26 +250,28 @@ async function executeJavaWithErrors(filePath, apiKey) {
 	});
 }
 
-// Extract explanation text from API response
-function processApiResponse(data) {
-	if (!data || !data[0]?.generated_text) return "No explanation available";
-
-	return data[0].generated_text
-		.replace(/Explain this Java \w+ error in simple terms:.*?\./s, "")
-		.trim()
-		.replace(/\n/g, " ");
+// Show program output in a dedicated panel
+function showOutputInPanel(output) {
+	const panel = vscode.window.createOutputChannel("Java Program Output");
+	panel.clear();
+	panel.appendLine("=== Program Execution Result ===");
+	panel.append(output);
+	panel.show();
 }
 
 // Show error message with option to view explanation
 function showErrorWithExplanation(error, explanation) {
-	vscode.window.showErrorMessage(`Java Error: ${error}`, "Show Explanation")
+	const truncatedError = error.length > 200 ? error.substring(0, 200) + "..." : error;
+
+	vscode.window.showErrorMessage(`Java Error: ${truncatedError}`, "Show Explanation")
 		.then(choice => {
 			if (choice === "Show Explanation") {
 				vscode.window.showInformationMessage(
-					`Error Explanation:\n${explanation}`,
-					{ modal: true }
+					`Error Explanation:\n\n${explanation}`,
+					{ modal: true, detail: "Detailed explanation from AI assistant" }
 				);
 			}
+
 		});
 }
 
